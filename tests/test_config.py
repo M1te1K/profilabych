@@ -14,6 +14,7 @@ def test_defaults_need_no_credentials_or_database() -> None:
     assert settings.openrouter_api_key is None
     assert settings.llm_model == "qwen/qwen3-coder:free"
     assert settings.log_level == "INFO"
+    assert settings.default_timezone == "Europe/Moscow"
     assert not settings.database_path.exists()
 
 
@@ -84,6 +85,9 @@ def test_empty_credentials_are_optional(monkeypatch: pytest.MonkeyPatch, value: 
         ("LLM_MODEL", "qwen/a b:free"),
         ("OPENROUTER_BASE_URL", "http://openrouter.ai/api/v1"),
         ("OPENROUTER_BASE_URL", "https://example.com/api/v1"),
+        ("DEFAULT_TIMEZONE", "Unknown/Planet"),
+        ("DEFAULT_TIMEZONE", ""),
+        ("DEFAULT_TIMEZONE", "   "),
     ],
 )
 def test_invalid_values_fail(monkeypatch: pytest.MonkeyPatch, name: str, value: str) -> None:
@@ -96,6 +100,11 @@ def test_model_can_be_changed_without_code_changes(monkeypatch: pytest.MonkeyPat
     # Synthetic identifier: the test checks configurability, not catalog availability.
     monkeypatch.setenv("LLM_MODEL", "deepseek/test-model:free")
     assert load_settings(env_file=None).llm_model == "deepseek/test-model:free"
+
+
+def test_default_timezone_can_be_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEFAULT_TIMEZONE", " Asia/Tokyo ")
+    assert load_settings(env_file=None).default_timezone == "Asia/Tokyo"
 
 
 def test_unknown_dotenv_field_is_rejected(tmp_path: Path) -> None:

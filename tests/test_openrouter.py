@@ -83,7 +83,8 @@ async def test_request_serialization_cost_guard_and_client_close() -> None:
     assert client.is_closed
 
 
-async def test_multiple_tool_calls_and_round_trip_ids() -> None:
+@pytest.mark.parametrize("include_index", [False, True])
+async def test_multiple_tool_calls_and_round_trip_ids(include_index: bool) -> None:
     tool_calls = [
         {
             "id": name,
@@ -99,14 +100,21 @@ async def test_multiple_tool_calls_and_round_trip_ids() -> None:
                 "message": {
                     "role": "assistant",
                     "content": None,
-                    "tool_calls": tool_calls,
+                    "tool_calls": [
+                        call | {"index": 10 - index} if include_index else call
+                        for index, call in enumerate(tool_calls)
+                    ],
                     "reasoning": "provider-specific",
                 },
             }
         ]
     }
 
+    bodies: list[dict[str, object]] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
+        if not request.url.path.endswith("/models"):
+            bodies.append(json.loads(request.content))
         return httpx.Response(
             200, json=catalog() if request.url.path.endswith("/models") else response
         )
@@ -115,6 +123,21 @@ async def test_multiple_tool_calls_and_round_trip_ids() -> None:
         answer = await provider.complete([Message(role="user", content="calculate")], [])
         assert [c.id for c in answer.tool_calls] == ["a", "b"]
         assert answer.to_wire()["tool_calls"] == tool_calls
+        await provider.complete(
+            [
+                Message(role="user", content="calculate"),
+                answer,
+                Message(role="tool", tool_call_id="a", content='{"result":"2"}'),
+                Message(role="tool", tool_call_id="b", content='{"result":"2"}'),
+            ],
+            [],
+        )
+    assert bodies[1]["messages"] == [
+        {"role": "user", "content": "calculate"},
+        {"role": "assistant", "content": None, "tool_calls": tool_calls},
+        {"role": "tool", "content": '{"result":"2"}', "tool_call_id": "a"},
+        {"role": "tool", "content": '{"result":"2"}', "tool_call_id": "b"},
+    ]
 
 
 @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
@@ -215,6 +238,25 @@ async def test_transport_unavailability(failure: type[httpx.TransportError]) -> 
             ]
         },
         {"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": None}}]},
+        {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": "bad",
+                                "type": "function",
+                                "index": 0,
+                                "unexpected": "metadata",
+                                "function": {"name": "calculator", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
         {
             "choices": [
                 {

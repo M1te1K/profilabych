@@ -1,6 +1,7 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic import JsonValue
@@ -112,17 +113,22 @@ async def test_controlled_errors(tmp_path: Path, name: str, arguments: str, code
         assert not await storage.list_notes(2)
 
 
-@pytest.mark.parametrize(("arguments", "offset"), [("{}", 0), ('{"timezone":"Europe/Moscow"}', 3)])
-async def test_current_time(tmp_path: Path, arguments: str, offset: int) -> None:
+@pytest.mark.parametrize(
+    ("arguments", "timezone"),
+    [("{}", "Europe/Moscow"), ('{"timezone":"UTC"}', "UTC")],
+)
+async def test_current_time(tmp_path: Path, arguments: str, timezone: str) -> None:
     async with SQLiteStorage(tmp_path / "test.sqlite3") as storage:
         registry = build_agent(FakeLLM([]), storage, Settings(_env_file=None))._registry
+        before = datetime.now(ZoneInfo(timezone)).strftime("%H:%M")
         result = await registry.execute(
             call("current_time", arguments), ToolContext(1, 0, "request")
         )
         assert result.ok
-        timestamp = datetime.fromisoformat(result.data["time"])
-        assert timestamp.utcoffset() == timedelta(hours=offset)
-        assert abs((datetime.now(timestamp.tzinfo) - timestamp).total_seconds()) < 5
+        after = datetime.now(ZoneInfo(timezone)).strftime("%H:%M")
+        assert result.data["timezone"] == timezone
+        assert result.data["time"] in {before, after}
+        assert result.data["answer"].startswith("Сейчас ")
 
 
 async def test_tool_timeout_and_external_cancellation() -> None:

@@ -6,6 +6,8 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from profilabych.timezones import DEFAULT_TIMEZONE, get_timezone
+
 type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 
@@ -24,6 +26,7 @@ class Settings(BaseSettings):
     app_env: Literal["development", "test", "production"] = "development"
     log_level: LogLevel = "INFO"
     database_path: Path = Path("data/profilabych.sqlite3")
+    default_timezone: str = Field(default=DEFAULT_TIMEZONE, min_length=1, max_length=100)
     telegram_bot_token: SecretStr | None = Field(default=None, repr=False)
     openrouter_api_key: SecretStr | None = Field(default=None, repr=False)
     openrouter_base_url: Literal["https://openrouter.ai/api/v1"] = "https://openrouter.ai/api/v1"
@@ -80,6 +83,13 @@ class Settings(BaseSettings):
         provider, model = value.removesuffix(":free").split("/")
         if not provider or not model or any(char.isspace() for char in value):
             raise ValueError("LLM_MODEL must be an explicit provider/model:free identifier")
+        return value
+
+    @field_validator("default_timezone")
+    @classmethod
+    def validate_default_timezone(cls, value: str) -> str:
+        value = value.strip()
+        get_timezone(value)
         return value
 
 

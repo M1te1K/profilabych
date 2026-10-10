@@ -1,4 +1,1 @@
-"""Telegram boundary for aiogram routers, commands and message formatting.
-
-Stage 1 does not instantiate Bot or start polling.
-"""
+"""Private-chat Telegram adapter; imports never start polling or access the network."""

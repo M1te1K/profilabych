@@ -34,6 +34,8 @@ dist/
 # Local state
 data/
 logs/
+# Local message/tool transcripts
+*.jsonl
 local_data/
 local-data/
 *.db
@@ -58,3 +60,7 @@ temp/
 .DS_Store
 .idea/
 .vscode/
+
+# Packaging credentials
+.pypirc
+.netrc

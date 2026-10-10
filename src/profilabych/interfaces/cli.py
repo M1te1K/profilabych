@@ -1,4 +1,4 @@
-"""Minimal terminal adapter sharing the same core as the future Telegram interface."""
+"""Minimal terminal adapter sharing the same core as the Telegram interface."""
 
 import asyncio
 from collections.abc import Callable

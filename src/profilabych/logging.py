@@ -92,8 +92,14 @@ class JsonFormatter(logging.Formatter):
             "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "event": record.getMessage(),
+            "event": "telegram_framework_event"
+            if record.name.startswith("aiogram.")
+            else record.getMessage(),
         }
+        # Aiogram embeds raw Telegram descriptions/decoded bodies in messages and tracebacks.
+        # Application handlers emit separate structured events with only error type and IDs.
+        if record.name.startswith("aiogram."):
+            return json.dumps(self._sanitize(payload), ensure_ascii=False)
         context = getattr(record, "context", None)
         inherited = dict(_REQUEST_CONTEXT.get() or {})
         if isinstance(context, Mapping):
@@ -121,4 +127,5 @@ def configure_logging(
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("aiosqlite").setLevel(logging.WARNING)
+    logging.getLogger("aiohttp").setLevel(logging.WARNING)
     logging.getLogger("pydantic_settings").setLevel(logging.WARNING)

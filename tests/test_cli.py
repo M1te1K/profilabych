@@ -19,22 +19,24 @@ from profilabych.storage.contracts import StorageError
 from profilabych.storage.sqlite import SQLiteStorage
 
 
-@pytest.mark.parametrize("flag", ["--demo", "--check", None])
+@pytest.mark.parametrize("flag", ["--demo", "--check", "--telegram", None])
 def test_local_modes_without_keys(tmp_path: Path, flag: str | None) -> None:
     command = [sys.executable, "-m", "profilabych"]
     if flag:
         command.append(flag)
     result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, timeout=10)
     assert not list(tmp_path.iterdir())
-    if flag is None:
+    if flag is None or flag == "--telegram":
         assert result.returncode == 1 and "OPENROUTER_API_KEY" in result.stderr
+        if flag == "--telegram":
+            assert "TELEGRAM_BOT_TOKEN" in result.stderr
     else:
         assert result.returncode == 0, result.stderr
         if flag == "--demo":
             assert '"result":"60"' in result.stdout
             assert "save_note" in result.stdout and "заметка 60 сохранена" in result.stdout
         else:
-            assert json.loads(result.stdout)["context"]["stage"] == 2
+            assert json.loads(result.stdout)["context"]["stage"] == 3
 
 
 def test_demo_runs_with_network_connections_forbidden(tmp_path: Path) -> None:

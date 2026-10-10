@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "profilabych"
 version = "0.1.0"
-description = "Модульный AI-агент с Tool Calling, SQLite и локальным CLI"
+description = "Модульный Telegram AI-агент с OpenRouter, Tool Calling, SQLite и CLI"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
 dependencies = [

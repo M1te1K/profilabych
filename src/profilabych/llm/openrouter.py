@@ -26,7 +26,7 @@ class OpenRouterProvider:
 
     def __init__(self, client: httpx.AsyncClient, settings: Settings) -> None:
         if settings.openrouter_api_key is None:
-            raise LLMError("missing_key", "Для CLI нужен OPENROUTER_API_KEY.")
+            raise LLMError("missing_key", "Для OpenRouter нужен OPENROUTER_API_KEY.")
         self._client = client
         self._settings = settings
         self._verified = False
@@ -186,14 +186,23 @@ class OpenRouterProvider:
             raw_message = choice["message"]
             if not isinstance(raw_message, dict):
                 raise ValueError("Invalid message")
+            raw_calls = raw_message.get("tool_calls")
+            if raw_calls is not None and not isinstance(raw_calls, list):
+                raise ValueError("Invalid tool calls")
+            # Some endpoints include a transport index even in non-streaming replies.
+            # Preserve the list order and IDs; the index is not part of the core contract.
+            tool_calls = [
+                {key: value for key, value in call.items() if key != "index"}
+                if isinstance(call, dict)
+                else call
+                for call in raw_calls or []
+            ]
             message = Message.model_validate_json(
                 json.dumps(
                     {
                         "role": raw_message.get("role"),
                         "content": raw_message.get("content"),
-                        "tool_calls": raw_message.get("tool_calls")
-                        if raw_message.get("tool_calls") is not None
-                        else [],
+                        "tool_calls": tool_calls,
                     }
                 )
             )

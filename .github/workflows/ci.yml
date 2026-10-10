@@ -1,0 +1,42 @@
+name: Python checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.13', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install locked dependencies and project
+        run: |
+          python -m pip install --require-hashes -r requirements-dev.txt
+          python -m pip install --no-deps -e .
+      - name: Tests
+        run: python -m pytest
+      - name: Lint
+        run: python -m ruff check .
+      - name: Formatting
+        run: python -m ruff format --check .
+      - name: Types
+        run: python -m mypy src
+      - name: Dependency compatibility
+        run: python -m pip check
+      - name: Offline startup
+        run: |
+          python -m profilabych --check
+          python -m profilabych --demo
+      - name: Build wheel
+        run: python -m pip wheel --no-deps --wheel-dir dist .

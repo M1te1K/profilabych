@@ -1,11 +1,11 @@
 # Архитектура Профилабыча
 
-## Состояние второго этапа
+## Состояние третьего этапа
 
 Сохранён один Python-пакет с src layout и прежними границами. Реализованы ядро,
-LLM Provider, Registry, SQLite и CLI. Нет DI-контейнера или агентного framework.
+LLM Provider, Registry, SQLite, CLI и Telegram. Нет DI-контейнера или агентного framework.
 `main.py` собирает зависимости аргументами и владеет жизненным циклом ресурсов.
-Telegram остаётся пакетом для следующего этапа. Импорты не читают настройки,
+Telegram использует установленный aiogram 3. Импорты не читают настройки,
 не открывают SQLite и не делают сетевых запросов.
 
 | Компонент | Ответственность |
@@ -20,6 +20,10 @@ Telegram остаётся пакетом для следующего этапа.
 | `storage/history.py` | Проверка завершённого хода и обрезка по границам ходов |
 | `storage/sqlite.py` | Одна управляемая aiosqlite connection, схема и атомарные транзакции |
 | `interfaces/cli.py` | Ввод, ответы, /reset, /exit; бизнес-логики нет |
+| `interfaces/telegram/handlers.py` | /start, /help, /reset, проверка текста, передача доверенных ID одному Agent |
+| `interfaces/telegram/presentation.py` | Обычный текст, UTF-16 разбиение, доставка и typing |
+| `interfaces/telegram/middleware.py` | Личные сообщения людей, дедупликация update_id и завершение обработчиков |
+| `interfaces/telegram/polling.py` | Dispatcher, message polling, остановка polling/обработчиков |
 | `config.py`, `logging.py` | Неизменяемые Settings, ограниченные JSON-логи, секреты и request context |
 
 ```mermaid
@@ -27,12 +31,13 @@ flowchart TD
     Main[main: сборка зависимостей] --> Config[Settings]
     Main --> Logs[JSON logging]
     Main --> CLI[CLI]
+    Main --> Telegram[Telegram adapter / aiogram]
     Main --> Agent[Agent Core]
     Main --> Provider[OpenRouter Provider]
     Main --> Registry[Tool Registry]
     Main --> Storage[SQLiteStorage]
     CLI --> Agent
-    Telegram[Будущий Telegram adapter] -. доверенные user_id/chat_id .-> Agent
+    Telegram -->|доверенные user_id/chat_id| Agent
     Agent -->|LLMProvider Protocol| Provider
     Agent --> Registry
     Agent -->|HistoryRepository Protocol| Storage
@@ -76,7 +81,65 @@ Settings и адаптером, ядро не содержит условий д
 Блокировка живёт только пока есть активные/ожидающие запросы пользователя,
 включая reset. Разные пользователи не блокируют друг друга на ожидании LLM.
 Это гарантия одного экземпляра Agent в одном процессе, а не распределённая очередь.
-Для Telegram следует использовать один Agent на приложение.
+Telegram использует один Agent на приложение.
+
+## Telegram и жизненный цикл
+
+`--telegram` добавлен к mutually exclusive режимам `--check` и `--demo`; запуск
+без флага остаётся CLI. Settings уже содержит TELEGRAM_BOT_TOKEN, OPENROUTER_API_KEY
+и LLM_MODEL, поэтому новые параметры/зависимости не потребовались. Отсутствующие
+ключи и неверный формат Telegram-токена отклоняются до сети и SQLite.
+
+Composition root открывает httpx/Provider, проверяет модель, открывает SQLite,
+строит Agent и Bot. Только затем начинается polling. При отказе preflight ресурсы
+закрываются и Telegram не стартует; оператор получает безопасную причину отказа.
+`user_id` и `chat_id` передаются из события, CLI-флаги на Telegram не влияют.
+Адаптер не содержит схем инструментов, промптов, цикла LLM или SQL.
+
+UpdateGuard пропускает только `Update.message` в private chat с положительным
+from_user.id и is_bot=false. Фильтр применяется перед командами и обычным текстом.
+Caption/media не становятся LLM-вводом; edited_message и channel_post игнорируются.
+Текст проверяется по USER_INPUT_MAX_CHARS до Agent. Команды start/help локальные,
+reset вызывает Agent.reset_history(user_id, chat_id=chat.id), остальные команды
+получают подсказку. Текстовый запрос вызывает Agent.handle с теми же ID.
+
+ID резервируется до первого await. Активные ID хранятся отдельно от FIFO-кеша
+последних 10000 завершённых ID, поэтому вытеснение кеша не удаляет защиту активного
+запроса. Ошибка доставки, ошибка обработки и отмена оставляют ID завершённым:
+инструмент мог уже зафиксировать побочный эффект. Кеш непостоянный; после
+перезапуска/вытеснения возможна повторная обработка. Гарантий exactly-once нет.
+
+Ответ отправляется частями в исходном порядке; каждый фрагмент не больше 4096
+UTF-16 units. Границы строк/слов предпочтительнее жёсткого разрыва, whitespace-only
+части пропускаются. formatting.py преобразует только парные **bold** и inline code
+в собственные entities, считая UTF-16 offsets. После разбиения entities пересекаются
+с границами фрагмента; смещения учитывают пропущенный whitespace-only текст.
+HTML, ссылки, fenced code и неподдерживаемая разметка остаются буквальным текстом.
+parse_mode=None, link preview отключён,
+allow_paid_broadcast=false. Telegram API errors/ClientDecodeError логируются
+типом и chat_id, без описания и тела. Только явно отклонённый запрос с RetryAfter
+до 5 секунд повторяется один раз; неоднозначные сетевые ошибки не повторяются.
+Typing отправляется сразу, затем каждые 4 секунды отдельной задачей; ошибка typing
+не отменяет запрос. Задача отменяется и ожидается при любом выходе.
+
+В Dispatcher отключён FSM, подписка только на message, до 16 активных обработчиков.
+UpdateGuard отслеживает обработчики и на shutdown закрывает вход, отменяет задачи
+и дожидается их. Одна задача пользователя не блокирует другие user_id внутри Agent.
+Ошибки программирования изолируются error handler aiogram, фиксируется тип ошибки
+и update_id; пользователю возвращается нейтральный ответ, отмена не подавляется.
+
+aiogram не ожидает всех update handlers автоматически. Его start_polling запускается
+под asyncio.shield: при внешней отмене wrapper ждёт готовности startup и вызывает
+stop_polling, чтобы завершить внутренний getUpdates worker. Shutdown hook и finally
+UpdateGuard дожидаются обработчиков до возврата из run_polling. Затем контекст Bot
+закрывает Telegram session, контекст SQLite — БД, Provider/httpx — HTTP-клиент.
+Startup failures проходят тот же finally. Жёсткое завершение процесса и повторная
+принудительная отмена во время shutdown не являются graceful shutdown.
+
+Настройки внешних аккаунтов, webhook и меню команд не изменяются приложением.
+Polling предполагает один процесс и отсутствие установленного webhook. Live-запросы
+требуют отдельного разрешения Product Owner; офлайн-тесты используют настоящие
+Dispatcher/Update с подменённой BaseSession, Fake LLM и httpx.MockTransport.
 
 ## OpenRouter
 
@@ -124,6 +187,12 @@ Calculator разбирает expression AST и исполняет только 
 стандартные datetime/ZoneInfo. NoteTools зависит от NotesRepository, получает
 owner из ToolContext, schema никогда не принимает идентификатор пользователя.
 list_notes поддерживает ограниченные страницы, сохраняя порядок created_at/id.
+Settings.default_timezone проверяется через ZoneInfo и по умолчанию Europe/Moscow.
+Composition root передаёт её current_time через partial и NoteTools через конструктор.
+timezone в current_time опционален: отсутствие/null означает настройку приложения,
+явный IANA timezone имеет приоритет. Время отдаётся как ЧЧ:ММ и готовая фраза answer.
+NoteTools преобразует UTC created_at в ДД.ММ.ГГГГ ЧЧ:ММ только для результата инструмента.
+Agent Core получает уточнённые инструкции о времени и датах; цикл tools не меняется.
 
 ## Хранение, целостность и ошибки
 
@@ -146,7 +215,9 @@ reset_history(user_id) удаляет историю всех чатов пол�
 
 Ожидаемая ошибка инструмента отправляется модели и позволяет повторить вызов с
 исправленными аргументами. LLMError, лимит или неверная роль/повтор ID завершают ход
-локальным понятным ответом; уже завершённые группы остаются в истории. Отклонённый
+локальным понятным ответом; для любого LLMError ответ строго «Сервис временно
+недоступен. Попробуйте позже.». Код ошибки остаётся в логах, детали не входят
+в историю или пользовательский ответ. Уже завершённые группы остаются в истории. Отклонённый
 ответ с необслуженными calls в историю не добавляется. Ошибка записи БД выражается
 AgentError, ответ не выдаётся как успешно сохранённый. При отмене до финального
 сохранения незавершённые ID закрываются результатом interrupted, записывается
@@ -155,8 +226,9 @@ AgentError, ответ не выдаётся как успешно сохран�
 фиксируется только безопасный лог.
 
 Ход диалога и отдельные инструменты не охвачены общей транзакцией. save_note может
-закоммититься до ошибки LLM, истории или timeout/cancellation. Идемпотентность
-повторного запроса и crash recovery пока отсутствуют. Нельзя обещать exactly-once
+закоммититься до ошибки LLM, истории или timeout/cancellation. Дедупликация Telegram
+update действует только в пределах кеша текущего процесса; идемпотентность нового
+запроса и crash recovery отсутствуют. Нельзя обещать exactly-once
 или сохранение текущего буфера при аварийном завершении процесса.
 
 ## Логирование и развитие
@@ -166,8 +238,11 @@ AgentError, ответ не выдаётся как успешно сохран�
 Bearer и чувствительные ключи маскируются. Request ContextVar переносит user_id,
 chat_id/request_id во вложенные provider logs без утечек между asyncio tasks.
 Тексты/аргументы/результаты логируются ограниченно согласно новому требованию этапа 2;
-сырые HTTP-тела/настройки не логируются, HTTP/aiosqlite debug подавлен.
+сырые HTTP-тела/настройки не логируются, HTTP/aiosqlite/aiohttp debug подавлен.
+JsonFormatter заменяет сообщения aiogram на telegram_framework_event без args,
+context и traceback: framework способен включить сырое описание Telegram в ошибку.
+Собственные события адаптера содержат безопасные типы ошибок и ID.
 
-Следующий этап: Telegram adapter, команды, доверенный контекст и представление
-ответов; отдельно разрешённый smoke test бесплатного OpenRouter. RAG, PDF, голос,
+Следующий шаг: отдельно разрешённый smoke test Telegram и бесплатного OpenRouter.
+Далее Product Owner определяет требования следующего этапа. RAG, PDF, голос,
 дополнительная память, ReAct и мультиагентность остаются отдельными расширениями.

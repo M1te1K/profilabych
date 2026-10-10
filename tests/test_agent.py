@@ -147,7 +147,7 @@ async def test_llm_failure_mid_turn_preserves_completed_action(tmp_path: Path) -
     )
     async with SQLiteStorage(tmp_path / "test.db") as storage:
         agent = build_agent(fake, storage, Settings(_env_file=None))
-        assert "Не удалось" in await agent.handle(1, "Сохрани")
+        assert await agent.handle(1, "Сохрани") == "Сервис временно недоступен. Попробуйте позже."
         assert (await storage.list_notes(1))[0].text == "keep"
         history = await storage.load_history(1)
         validate_turn(history)
@@ -198,12 +198,13 @@ async def test_rejects_repeated_call_ids_and_wrong_role(tmp_path: Path) -> None:
             ]
         )
         agent = build_agent(fake, storage, Settings(_env_file=None))
-        assert "tool_call_id" in await agent.handle(1, "save")
+        assert await agent.handle(1, "save") == "Сервис временно недоступен. Попробуйте позже."
         assert [n.text for n in await storage.list_notes(1)] == ["once"]
         validate_turn(await storage.load_history(1))
         fake = FakeLLM([Message(role="user", content="wrong")])
-        assert "роль" in await build_agent(fake, storage, Settings(_env_file=None)).handle(
-            2, "hello"
+        assert (
+            await build_agent(fake, storage, Settings(_env_file=None)).handle(2, "hello")
+            == "Сервис временно недоступен. Попробуйте позже."
         )
         validate_turn(await storage.load_history(2))
 

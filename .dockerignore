@@ -20,6 +20,15 @@ logs
 **/*.db-*
 **/*.sqlite*
 **/*.log
+**/*.jsonl
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+.envrc
+.direnv
+.pypirc
+.netrc
 **/*.tmp
 .DS_Store
 .idea

@@ -3,6 +3,7 @@
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from profilabych.storage.contracts import NotesRepository
+from profilabych.timezones import DEFAULT_TIMEZONE, display_datetime, get_timezone
 from profilabych.tools.registry import ToolContext, ToolError
 
 
@@ -18,9 +19,16 @@ class ListNotesArguments(BaseModel):
 
 
 class NoteTools:
-    def __init__(self, repository: NotesRepository, *, max_length: int = 2000) -> None:
+    def __init__(
+        self,
+        repository: NotesRepository,
+        *,
+        max_length: int = 2000,
+        default_timezone: str = DEFAULT_TIMEZONE,
+    ) -> None:
         self._repository = repository
         self._max_length = max_length
+        self._zone = get_timezone(default_timezone)
 
     async def save_note(
         self, arguments: SaveNoteArguments, context: ToolContext
@@ -35,10 +43,20 @@ class NoteTools:
         notes = await self._repository.list_notes(
             context.user_id, limit=arguments.limit, offset=arguments.offset
         )
+        try:
+            displayed_notes: list[JsonValue] = [
+                {
+                    "id": note.id,
+                    "text": note.text,
+                    "created_at": display_datetime(note.created_at, self._zone),
+                }
+                for note in notes
+            ]
+        except ValueError:
+            raise ToolError("invalid_timestamp", "Дата создания заметки повреждена.") from None
         return {
-            "notes": [
-                {"id": note.id, "text": note.text, "created_at": note.created_at} for note in notes
-            ],
+            "notes": displayed_notes,
+            "timezone": self._zone.key,
             "offset": arguments.offset,
             "limit": arguments.limit,
         }
